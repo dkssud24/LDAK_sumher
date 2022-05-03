@@ -1,0 +1,163 @@
+====================ref pannel @@@@@@@@@@@@=====================
+
+1 - Download sample IDs and extract non-Finnish Europeans
+
+wget ftp://ftp.1000genomes.ebi.ac.uk/vol1/ftp/release/20130502/integrated_call_samples_v3.20130502.ALL.panel
+awk < integrated_call_samples_v3.20130502.ALL.panel '($3=="EUR" && $2!="FIN"){print $1, $1}' > eur.keep
+
+2 - Download data for each autosome, and convert using PLINK, extracting European individuals and SNPs with MAF>0.01
+
+for j in {1..22}; do
+wget ftp://ftp.1000genomes.ebi.ac.uk/vol1/ftp/release/20130502/\
+ALL.chr$j.phase3_shapeit2_mvncall_integrated_v5a.20130502.genotypes.vcf.gz
+./plink --vcf ALL.chr$j.phase3_shapeit2_mvncall_integrated_v5a.20130502.genotypes.vcf.gz \
+--make-bed --out chr$j --maf 0.01 --keep eur.keep
+done
+
+3 -  Join these together, excluding multi-allelic SNPs and those with duplicate positions
+
+rm list.txt; for j in {1..22}; do echo chr$j >> list.txt; done
+./ldak5.linux --make-bed all --mbfile list.txt --exclude-odd YES --exclude-dups YES --exclude-same YES
+## --exclude-same YES 추가해~
+The genotype data will now be stored in binary PLINK format in the files all.bed, all.bim and all.fam.
+
+4 - Some predictors have non-unique names (49 in mine), so identify and replace these with generic names of the form chr:bp
+
+awk < all.bim '{print $2}' | sort | uniq -d > dup.snps
+awk '(NR==FNR){arr[$1];next}($2 in arr){$2=$1":"$4}{print $0}' dup.snps all.bim > clean.bim
+cp all.bed clean.bed
+cp all.fam clean.fam
+
+4 - Finally, we need to obtain and insert genetic distances
+
+wget https://www.dropbox.com/s/slchsd0uyd4hii8/genetic_map_b37.zip?dl=0
+unzip genetic_map_b37.zip
+
+for j in {1..22}; do
+./plink --bfile clean --chr $j --cm-map  genetic_map_b37/genetic_map_chr@_combined_b37.txt --make-bed --out map$j
+done
+
+cat map{1..22}.bim | awk '{print $2, $3}' > map.all
+awk '(NR==FNR){arr[$1]=$2;next}{print $1, $2, arr[$2], $4, $5, $6}' map.all clean.bim > ref.bim
+cp all.bed ref.bed
+cp all.fam ref.fam
+
+If these scripts have run successfully, then your reference panel is saved in Binary PLINK format in the files ref.bed, ref.bim and ref.fam, (you can remove the files with prefixes chr, clean, map and all).
+
+
+==============================================================================================================================================================================================================================
+
+step1 얘네가 원하는 인풋대로 만들어주기 (ldsc input으로 만들어 놓은것을)
+
+ cat result_GWIS_drf_onBMI_inpu_ldsc.txt | awk '(NR>1){snp=$2;a1=$4;a2=$13;dir=$7;stat=($7/$8)^2;n=$6}(NR==1){print"Predictor A1 A2 Direction Stat n"}(NR>1&&(a1=="A"||a1=="C"||a1=="G"||a1=="T")&&(a2=="A"||a2=="C"||a2=="G"||a2=="T")){print snp, a1, a2, dir, stat, n}' -> drf_onBMI.txt
+## 원본  | awk '(NR>1){snp=$1;a1=$2;a2=$3;dir=$5;stat=($5/$6)^2;n=$8}(NR==1){print "Predictor A1 A2 Direction Stat n"}(NR>1 && (a1=="A"||a1=="C"||a1=="G"||a1=="T") && (a2=="A"||a2=="C"||a2=="G"||a2=="T")){print snp, a1, a2, dir, stat, n}' - > height.txt
+
+step2 snp id 동일한거 빼주기
+
+##원본 awk < height.txt '{print $1}' | sort | uniq -d | head
+
+
+##It is sensible to check whether there are duplicate predictor names; the following command identifies which names appear more than once using the unix functions awk, sort and uniq (if it produces no output, there are no duplicates).
+
+awk < height.txt '{print $1}' | sort | uniq -d | head
+이걸통해 dupliacte된애들 명단을 볼 수 있음
+##If there are duplicates, we could rename, but it is easier to simply remove all except one copy using this (magic) awk command (I don't fully understand how it works!)
+
+mv height.txt height2.txt
+awk '!seen[$1]++' height2.txt > height.txt
+이를통해 dupicate된애들끼리 이름 바꿀수있음 야매임
+
+
+##To create a list of predictors for which we have summary statistics, use
+
+
+step3 결과 파일의 snp들을 가져오는거임 우린 필없음
+awk < height.txt '(NR>1){print $1}' > height.predictors
+predictors값을 구함
+
+
+##To reduce these to predictors with non-ambiguous alleles, use
+
+
+step4 결과파일중에 좀만 이상한 snp들 싹다 제거하는거 non~ ambious 한 애들만 뽑아냄 우린 나중에 이걸로 heri 구할꺼
+awk < met_onBMI.txt '( ($2=="A"&&$3=="C") || ($2=="A"&&$3=="G") || ($2=="C"&&$3=="A") || ($2=="C"&&$3=="T") || ($2=="G"&&$3=="A") || ($2=="G"&&$3=="T") || ($2=="T"&&$3=="C") || ($2=="T"&&$3=="G") ){print $1}' > drf_onBMI.nonamb
+
+step5  mhc 꺼져~
+
+awk < ref.bim '($1==6 && $4>25000000 && $4<34000000){print $2}' > mhc.snps
+
+step6 effect 큰거 빼려고 모아둔거
+awk < height.txt '(NR>1 && $5>$6/99){print $1}' > height.big
+
+step 7
+원래대로라면 여태 미심적은애들 다 한번에 합쳐야하는데 우린 interaction study라 이팩트 큰애도 없고 non ambigous를 만든상황이기도 해서 이 작업은 노필요
+나중에 height.exclude 을 mhc.list 로 수정해서 분석하면됨
+../ldak.out --remove-tags height --bfile ref --top-preds height.big --window-cm 1 --min-cor .1
+
+
+
+
+taggin part
+
+There are 7 pairs of arguments:
+--calc-tagging sumldak_met_onBMI
+--bfile ../../../ref_pannel_bedbimfam/ref
+--ignore-weights YES
+--power -1
+--window-cm 1
+--extract met_onBMI.nonamb
+--exclude mhc.snps
+
+/BiO/hae/77_sum_her/./ldak5.1.linux --calc-tagging sumldak_tdi_onBMI --bfile ../../../../ref_pannel_bedbimfam/ref --ignore-weights YES --power -1 --window-cm 1 --extract tdi_onBMI.nonamb --exclude mhc.snps
+
+참고로 @@@
+
+ If we wanted to exclude ambiguous predictors we would use --extract height.nonamb instead of --extract height.predictors. To parallelize this process, we can compute weights separately for each chromosome, then merge
+
+for j in {1..22}; do
+/BiO/hae/77_sum_her/./ldak5.1.linux --calc-tagging sumldak$j --bfile /BiO/hae/77_sum_her/ref_pannel_bedbimfam/ref --weights sumsect/weights.short --power -0.25 --extract height.predictors --exclude height.exclude --window-cm 1 --chr $j
+done
+
+rm list.txt; for j in {1..22}; do echo "sumldak$j.tagging" >> list.txt; done
+../ldak.out --join-tagging sumldak --taglist list.txt
+
+To instead create a tagging file assuming the LDSC Model, replace --weights sumsect/weights.short --power -0.25 with --ignore-weights YES --power -1.
+
+라는 문구가 있는데 위에 이걸 사용할시 좀더 weight을 각각 줄수있다함 .........
+
+그래서 나는(유럽인) **
+for j in {1..22}; do
+	/BiO/hae/77_sum_her/./ldak5.1.linux --calc-tagging sumldak$j --bfile /BiO/hae/77_sum_her/ref_pannel_bedbimfam/ref --ignore-weights YES --power 1 --extract met_onBMI.nonamb --exclude mhc.snps --window-cm 1 --chr $j
+done
+
+
+****동양인꺼 mhc region SNP들 다른거알지 ?
+for j in {1..22}; do
+	/BiO/hae/77_sum_her/./ldak5.1.linux --calc-tagging sumldak$j --bfile /BiO/hae/77_sum_her/ref_pannel_bedbimfam_east_asian/ref --ignore-weights YES --power 1 --extract met_onBMI.nonamb --exclude mhc.snps --window-cm 1 --chr $j
+done
+
+이렇게 코딩을 짯고
+이상태로 멀지함
+
+heritability
+http://dougspeed.com/confounding-bias/
+
+
+rm list.txt; for j in {1..22}; do echo "sumldak$j.tagging" >> list.txt; done
+../ldak.out --join-tagging sumldak --taglist list.txt
+
+
+../ldak.out --sum-hers sumldak_cept --tagfile sumldak.tagging --summary height.txt --intercept YES --check-sums NO
+
+ /BiO/hae/77_sum_her/./ldak5.1.linux --sum-hers sumldak_cept --tagfile sumldak.tagging --summary nap_onBMI.txt --intercept YES --check-sums NO
+================================================================
+
+식 설명
+http://dougspeed.com/technical-details/
+weight을 주고 안주고 설명
+http://dougspeed.com/calculate-weightings/
+
+
+=====================
+ldak 논문
+https://www.nature.com/articles/s41588-020-0600-y.epdf?author_access_token=9TdvyxMiAIfEuX7_fu16Y9RgN0jAjWel9jnR3ZoTv0OAJ3qyIt-J9iUJPJGZpqIoOPkaGI50mnSqUJAKTQjiWbyYuPCyQE_qA4rz8BJ6mI5rigRuaotPI02IQL6MRUDyjjgOr6yZ_QKwjIbU8D9-tQ%3D%3D
